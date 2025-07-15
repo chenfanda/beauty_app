@@ -196,6 +196,10 @@ class HyperStyleEncoder:
         if save_dir and save_dir != '':
             os.makedirs(save_dir, exist_ok=True)
         
+        # 🔥 关键修复：确保有批次维度
+        if len(latent.shape) == 2:  # [18, 512]
+            latent = latent.unsqueeze(0)  # 变成 [1, 18, 512]
+            
         save_data = {
             'latent': latent.cpu(),
             'shape': list(latent.shape),
