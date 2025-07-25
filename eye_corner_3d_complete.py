@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """
-3D姿态感知的眼角调整脚本 - eye_corner_3d_complete.py
-核心特色：
-1. 基于PnP算法的真实3D头部姿态估计
-2. 3D感知的自适应眼角变形策略
-3. 眼形识别 + 3D姿态的双重智能控制
-4. 透视校正的参考点计算
-5. 姿态自适应的移动向量和强度
+精简高效眼角调整器 - streamlined_eye_corner_adjuster.py
+核心理念：基于美学原理的智能调整，删除过度工程化的功能
+
+保留的核心功能：
+1. 3D姿态感知 - PnP算法的真实头部姿态估计
+2. 美学导向的移动策略 - 识别眼形特征，制定针对性移动策略
+3. 结构完整性保护 - 确保眼周组织协调性
+4. 智能强度控制 - 保证可见效果的同时确保自然
+
+删除的冗余功能：
+- 过于复杂的年龄估计
+- 过度细分的眼形分类
+- 多层次因子相乘导致的强度稀释
+- 过于保守的安全机制
 """
 
 import cv2
@@ -14,257 +21,13 @@ import numpy as np
 import mediapipe as mp
 import argparse
 import os
-from typing import List, Tuple, Optional, Dict
+from typing import Tuple, Dict, List, Optional
 
-class EyeShape3DAnalyzer:
-    """3D感知的眼形识别和分析模块"""
+class EyeCornerAdjuster:
+    """精简高效的眼角调整器"""
     
     def __init__(self):
-        # 基于医学美学的眼形分类标准
-        self.EYE_SHAPE_CATEGORIES = {
-            'round': {
-                'length_width_ratio': (2.0, 2.7),
-                'tilt_angle': (-5, 5),
-                'recommended_adjustments': ['stretch', 'lift', 'shape'],
-                'pose_sensitivity': {'frontal': 1.0, 'profile': 0.8},
-                'description': '圆润可爱型眼睛，适合拉长和上扬'
-            },
-            'almond': {
-                'length_width_ratio': (2.8, 3.2),
-                'tilt_angle': (5, 15),
-                'recommended_adjustments': ['minimal', 'enhancement'],
-                'pose_sensitivity': {'frontal': 0.7, 'profile': 0.5},
-                'description': '理想杏仁眼型，只需轻微调整'
-            },
-            'upturned': {
-                'length_width_ratio': (2.5, 3.5),
-                'tilt_angle': (15, 25),
-                'recommended_adjustments': ['stretch_only'],
-                'contraindicated': ['lift'],
-                'pose_sensitivity': {'frontal': 0.8, 'profile': 0.6},
-                'description': '已经上扬的眼型，避免过度调整'
-            },
-            'downturned': {
-                'length_width_ratio': (2.3, 3.0),
-                'tilt_angle': (-15, -5),
-                'recommended_adjustments': ['lift', 'shape'],
-                'pose_sensitivity': {'frontal': 1.2, 'profile': 1.0},
-                'description': '下垂眼型，最适合上扬调整'
-            },
-            'elongated': {
-                'length_width_ratio': (3.3, 4.0),
-                'tilt_angle': (-5, 10),
-                'recommended_adjustments': ['lift'],
-                'contraindicated': ['stretch'],
-                'pose_sensitivity': {'frontal': 0.6, 'profile': 0.8},
-                'description': '细长眼型，避免进一步拉长'
-            },
-            'normal': {
-                'length_width_ratio': (2.7, 3.1),
-                'tilt_angle': (-3, 8),
-                'recommended_adjustments': ['stretch', 'lift', 'shape'],
-                'pose_sensitivity': {'frontal': 1.0, 'profile': 0.9},
-                'description': '标准眼型，各种调整均适用'
-            }
-        }
-    
-    def analyze_eye_shape_3d(self, landmarks_2d, pose_info):
-        """基于3D姿态的眼形分析"""
-        measurements = self.calculate_eye_measurements(landmarks_2d)
-        
-        # 3D姿态修正
-        if pose_info is not None:
-            measurements = self.correct_measurements_for_3d_pose(measurements, pose_info)
-        
-        eye_shape = self.classify_eye_shape(measurements)
-        
-        # 3D姿态修正分类置信度
-        if pose_info is not None:
-            eye_shape = self.adjust_classification_for_pose(eye_shape, pose_info)
-        
-        return {
-            'eye_shape': eye_shape,
-            'measurements': measurements,
-            'recommendations': self.generate_3d_recommendations(eye_shape, pose_info)
-        }
-    
-    def calculate_eye_measurements(self, landmarks_2d):
-        """计算眼形的关键测量指标"""
-        # 左眼关键点
-        left_inner = landmarks_2d[133]
-        left_outer = landmarks_2d[33]
-        left_top = landmarks_2d[159]
-        left_bottom = landmarks_2d[145]
-        
-        # 右眼关键点
-        right_inner = landmarks_2d[362]
-        right_outer = landmarks_2d[263]
-        right_top = landmarks_2d[386]
-        right_bottom = landmarks_2d[374]
-        
-        # 基本尺寸计算
-        left_length = np.linalg.norm(left_outer - left_inner)
-        left_height = np.linalg.norm(left_top - left_bottom)
-        left_ratio = left_length / left_height if left_height > 0 else 3.0
-        
-        right_length = np.linalg.norm(right_outer - right_inner)
-        right_height = np.linalg.norm(right_top - right_bottom)
-        right_ratio = right_length / right_height if right_height > 0 else 3.0
-        
-        # 平均比例
-        avg_ratio = (left_ratio + right_ratio) / 2
-        
-        # 倾斜角度计算
-        left_tilt = np.degrees(np.arctan2(
-            left_outer[1] - left_inner[1],
-            left_outer[0] - left_inner[0]
-        ))
-        
-        right_tilt = np.degrees(np.arctan2(
-            right_outer[1] - right_inner[1],
-            right_outer[0] - right_inner[0]
-        ))
-        
-        avg_tilt = (left_tilt + right_tilt) / 2
-        
-        return {
-            'length_width_ratio': avg_ratio,
-            'tilt_angle': avg_tilt,
-            'left_ratio': left_ratio,
-            'right_ratio': right_ratio,
-            'symmetry_score': 1.0 - abs(left_ratio - right_ratio) / max(left_ratio, right_ratio),
-            'absolute_size': (left_length + right_length) / 2
-        }
-    
-    def correct_measurements_for_3d_pose(self, measurements, pose_info):
-        """3D姿态透视校正"""
-        rotation_vector, translation_vector = pose_info
-        rotation_matrix, _ = cv2.Rodrigues(rotation_vector)
-        
-        # 计算yaw角度
-        sy = np.sqrt(rotation_matrix[0,0] * rotation_matrix[0,0] + rotation_matrix[1,0] * rotation_matrix[1,0])
-        yaw = np.degrees(np.arctan2(-rotation_matrix[2,0], sy))
-        
-        # 透视校正因子
-        perspective_factor = np.cos(np.radians(abs(yaw)))
-        
-        # 校正长宽比（侧脸时眼睛被压缩）
-        corrected_ratio = measurements['length_width_ratio'] / max(perspective_factor, 0.7)
-        
-        # 校正倾斜角（侧脸时角度被扭曲）
-        if abs(yaw) > 20:
-            angle_correction = yaw * 0.3
-            corrected_tilt = measurements['tilt_angle'] - angle_correction
-        else:
-            corrected_tilt = measurements['tilt_angle']
-        
-        measurements_corrected = measurements.copy()
-        measurements_corrected['length_width_ratio'] = corrected_ratio
-        measurements_corrected['tilt_angle'] = corrected_tilt
-        measurements_corrected['pose_corrected'] = True
-        measurements_corrected['yaw_angle'] = yaw
-        
-        print(f"🔄 3D透视校正: yaw={yaw:.1f}°, 比例{measurements['length_width_ratio']:.2f}→{corrected_ratio:.2f}")
-        
-        return measurements_corrected
-    
-    def adjust_classification_for_pose(self, eye_shape, pose_info):
-        """基于3D姿态调整分类置信度"""
-        rotation_vector, _ = pose_info
-        rotation_matrix, _ = cv2.Rodrigues(rotation_vector)
-        sy = np.sqrt(rotation_matrix[0,0] * rotation_matrix[0,0] + rotation_matrix[1,0] * rotation_matrix[1,0])
-        yaw = np.degrees(np.arctan2(-rotation_matrix[2,0], sy))
-        
-        # 侧脸时降低分类置信度
-        if abs(yaw) > 30:
-            eye_shape['confidence'] *= 0.8
-            eye_shape['pose_warning'] = f"大角度侧脸(yaw={yaw:.1f}°)，分类精度降低"
-        elif abs(yaw) > 15:
-            eye_shape['confidence'] *= 0.9
-        
-        return eye_shape
-    
-    def classify_eye_shape(self, measurements):
-        """基于测量值分类眼形"""
-        ratio = measurements['length_width_ratio']
-        tilt = measurements['tilt_angle']
-        
-        best_match = None
-        best_score = 0
-        
-        for shape_name, criteria in self.EYE_SHAPE_CATEGORIES.items():
-            score = 0
-            
-            # 长宽比匹配度 (权重50%)
-            if criteria['length_width_ratio'][0] <= ratio <= criteria['length_width_ratio'][1]:
-                score += 50
-            else:
-                min_ratio, max_ratio = criteria['length_width_ratio']
-                if ratio < min_ratio:
-                    deviation = (min_ratio - ratio) / min_ratio
-                else:
-                    deviation = (ratio - max_ratio) / max_ratio
-                score += max(0, 50 - deviation * 100)
-            
-            # 倾斜角度匹配度 (权重50%)
-            if criteria['tilt_angle'][0] <= tilt <= criteria['tilt_angle'][1]:
-                score += 50
-            else:
-                min_tilt, max_tilt = criteria['tilt_angle']
-                if tilt < min_tilt:
-                    deviation = abs(min_tilt - tilt) / 20
-                else:
-                    deviation = abs(tilt - max_tilt) / 20
-                score += max(0, 50 - deviation * 100)
-            
-            if score > best_score:
-                best_score = score
-                best_match = shape_name
-        
-        confidence = best_score / 100.0
-        
-        return {
-            'primary_type': best_match,
-            'confidence': confidence
-        }
-    
-    def generate_3d_recommendations(self, eye_shape, pose_info):
-        """生成3D感知的调整建议"""
-        shape_type = eye_shape['primary_type']
-        config = self.EYE_SHAPE_CATEGORIES[shape_type]
-        
-        base_recommendations = {
-            'recommended_adjustments': config['recommended_adjustments'],
-            'contraindicated': config.get('contraindicated', []),
-            'description': config['description']
-        }
-        
-        # 3D姿态感知的强度调整
-        if pose_info is not None:
-            rotation_vector, _ = pose_info
-            rotation_matrix, _ = cv2.Rodrigues(rotation_vector)
-            sy = np.sqrt(rotation_matrix[0,0] * rotation_matrix[0,0] + rotation_matrix[1,0] * rotation_matrix[1,0])
-            yaw = np.degrees(np.arctan2(-rotation_matrix[2,0], sy))
-            
-            # 根据姿态调整推荐强度
-            if abs(yaw) < 15:
-                pose_type = 'frontal'
-                pose_multiplier = config['pose_sensitivity']['frontal']
-            else:
-                pose_type = 'profile'
-                pose_multiplier = config['pose_sensitivity']['profile']
-            
-            base_recommendations['pose_type'] = pose_type
-            base_recommendations['pose_multiplier'] = pose_multiplier
-            base_recommendations['yaw_angle'] = yaw
-        
-        return base_recommendations
-
-class EyeCorner3DProcessor:
-    """3D感知的眼角处理器"""
-    
-    def __init__(self):
-        # MediaPipe设置
+        # MediaPipe初始化
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
             static_image_mode=True,
@@ -278,50 +41,44 @@ class EyeCorner3DProcessor:
         self.camera_matrix = None
         self.dist_coeffs = None
         
-        # 初始化眼形分析器
-        self.eye_analyzer = EyeShape3DAnalyzer()
-        
-        # 3D面部模型（毫米单位）
+        # 3D面部模型 (简化版，只保留关键点)
         self.face_model_3d = np.array([
-            [0.0, 0.0, 0.0],           # 鼻尖 (1)
-            [0.0, -330.0, -65.0],      # 下巴 (152)
-            [-225.0, 170.0, -135.0],   # 左眼外角 (33)
-            [225.0, 170.0, -135.0],    # 右眼外角 (263)
-            [-150.0, -150.0, -125.0],  # 左嘴角 (61)
-            [150.0, -150.0, -125.0],   # 右嘴角 (291)
+            [0.0, 0.0, 0.0],           # 鼻尖
+            [0.0, -330.0, -65.0],      # 下巴
+            [-225.0, 170.0, -135.0],   # 左眼外角
+            [225.0, 170.0, -135.0],    # 右眼外角
+            [-150.0, -150.0, -125.0],  # 左嘴角
+            [150.0, -150.0, -125.0],   # 右嘴角
         ], dtype=np.float32)
         
         self.pnp_indices = [1, 152, 33, 263, 61, 291]
         
-        # 3D感知的眼角移动点定义
-        self.EYE_MOVEMENT_REGIONS = {
+        # 眼部移动区域定义 (精简版)
+        self.EYE_REGIONS = {
             'left_eye': {
-                'outer_corner': [33],           # 左眼外眦
-                'inner_corner': [133],          # 左眼内眦
-                'upper_lid': [157, 158, 159],   # 上眼睑
-                'lower_lid': [145, 153, 154],   # 下眼睑
-                'transition': [160, 161, 163]   # 过渡区域
+                'outer_corner': [33],                    # 主要外眦点
+                'outer_support': [7, 163],               # 外眦支撑点
+                'inner_corner': [133],                   # 内眦点
+                'upper_lid': [157, 158, 159, 160, 161],  # 上眼睑
+                'lower_lid': [144, 145, 153],            # 下眼睑
             },
             'right_eye': {
-                'outer_corner': [263],          # 右眼外眦
-                'inner_corner': [362],          # 右眼内眦
-                'upper_lid': [386, 387, 388],   # 上眼睑
-                'lower_lid': [374, 380, 384],   # 下眼睑
-                'transition': [385, 390, 466]   # 过渡区域
+                'outer_corner': [263],                   # 主要外眦点
+                'outer_support': [249, 390],             # 外眦支撑点
+                'inner_corner': [362],                   # 内眦点
+                'upper_lid': [386, 387, 388, 466],       # 上眼睑
+                'lower_lid': [373, 374, 380],            # 下眼睑
             }
         }
         
-        # 远程稳定锚点
+        # 稳定锚点 (简化版)
         self.STABLE_ANCHORS = [
-            1, 2, 5, 4, 6, 19, 20,      # 鼻子区域
-            9, 10, 151, 175,            # 额头和下巴
-            61, 291, 39, 269, 270,      # 嘴巴区域
-            234, 93, 132, 454, 323, 361, # 脸颊边缘
-            70, 296, 107, 276           # 眉毛区域
+            1, 2, 5, 4, 6,              # 鼻部核心
+            9, 10, 151, 175,            # 面部中轴
+            61, 291, 39, 269, 270,      # 嘴部区域
+            70, 296, 107, 276,          # 眉毛区域
+            168, 6, 8                   # 对称轴
         ]
-        
-        # 对称辅助点
-        self.SYMMETRY_HELPERS = [168, 6, 8, 9]
     
     def setup_camera(self, image_shape):
         """设置相机参数"""
@@ -337,8 +94,8 @@ class EyeCorner3DProcessor:
         
         self.dist_coeffs = np.zeros((4,1), dtype=np.float32)
     
-    def detect_landmarks_3d(self, image):
-        """检测面部关键点并计算3D姿态"""
+    def detect_landmarks_with_pose(self, image):
+        """检测关键点并估计3D姿态"""
         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         results = self.face_mesh.process(rgb_image)
         
@@ -359,367 +116,473 @@ class EyeCorner3DProcessor:
         if self.camera_matrix is None:
             self.setup_camera(image.shape)
         
-        # 提取用于PnP的关键点
-        image_points = []
-        for idx in self.pnp_indices:
-            if idx < len(landmarks_2d):
-                image_points.append(landmarks_2d[idx])
-        
-        if len(image_points) < 6:
-            print("⚠️ PnP关键点不足，3D姿态估计失败")
-            return landmarks_2d, None
-        
-        image_points = np.array(image_points, dtype=np.float32)
-        
         # PnP求解3D姿态
+        pose_info = None
         try:
-            success, rotation_vector, translation_vector = cv2.solvePnP(
-                self.face_model_3d, image_points, 
-                self.camera_matrix, self.dist_coeffs,
-                flags=cv2.SOLVEPNP_ITERATIVE
-            )
+            image_points = []
+            for idx in self.pnp_indices:
+                if idx < len(landmarks_2d):
+                    image_points.append(landmarks_2d[idx])
             
-            if success:
-                return landmarks_2d, (rotation_vector, translation_vector)
-            else:
-                print("⚠️ PnP求解失败")
-                return landmarks_2d, None
+            if len(image_points) >= 6:
+                image_points = np.array(image_points, dtype=np.float32)
                 
+                success, rotation_vector, translation_vector = cv2.solvePnP(
+                    self.face_model_3d, image_points, 
+                    self.camera_matrix, self.dist_coeffs,
+                    flags=cv2.SOLVEPNP_ITERATIVE
+                )
+                
+                if success:
+                    pose_info = (rotation_vector, translation_vector)
+        
         except Exception as e:
-            print(f"⚠️ PnP求解异常: {e}")
-            return landmarks_2d, None
+            print(f"⚠️ 3D姿态估计失败: {e}")
+        
+        return landmarks_2d, pose_info
     
-    def estimate_face_pose_3d(self, rotation_vector):
-        """基于3D旋转向量估计面部姿态"""
-        if rotation_vector is None:
-            return "frontal", 0.0, 0.0, 0.0
+    def analyze_eye_characteristics(self, landmarks_2d):
+        """简化的眼形特征分析 - 只识别关键特征"""
         
-        rotation_matrix, _ = cv2.Rodrigues(rotation_vector)
-        
-        # 计算欧拉角
-        sy = np.sqrt(rotation_matrix[0,0] * rotation_matrix[0,0] + rotation_matrix[1,0] * rotation_matrix[1,0])
-        
-        if sy > 1e-6:
-            x = np.arctan2(rotation_matrix[2,1], rotation_matrix[2,2])
-            y = np.arctan2(-rotation_matrix[2,0], sy)
-            z = np.arctan2(rotation_matrix[1,0], rotation_matrix[0,0])
-        else:
-            x = np.arctan2(-rotation_matrix[1,2], rotation_matrix[1,1])
-            y = np.arctan2(-rotation_matrix[2,0], sy)
-            z = 0
-        
-        # 转换为度数
-        pitch = np.degrees(x)
-        yaw = np.degrees(y)
-        roll = np.degrees(z)
-        
-        # 判断主要姿态
-        if abs(yaw) < 15 and abs(pitch) < 15:
-            pose_type = "frontal"
-        elif yaw > 15:
-            pose_type = "right_profile"
-        elif yaw < -15:
-            pose_type = "left_profile"
-        elif pitch > 15:
-            pose_type = "looking_down"
-        elif pitch < -15:
-            pose_type = "looking_up"
-        else:
-            pose_type = "mixed"
-        
-        return pose_type, yaw, pitch, roll
+        try:
+            # 关键点获取
+            left_inner, left_outer = landmarks_2d[133], landmarks_2d[33]
+            left_top, left_bottom = landmarks_2d[159], landmarks_2d[145]
+            right_inner, right_outer = landmarks_2d[362], landmarks_2d[263]
+            right_top, right_bottom = landmarks_2d[386], landmarks_2d[374]
+            
+            # 计算关键特征
+            left_tilt = np.degrees(np.arctan2(left_outer[1] - left_inner[1], left_outer[0] - left_inner[0]))
+            right_tilt = np.degrees(np.arctan2(right_outer[1] - right_inner[1], right_outer[0] - right_inner[0]))
+            avg_tilt = (left_tilt + right_tilt) / 2
+            
+            left_length = np.linalg.norm(left_outer - left_inner)
+            left_height = np.linalg.norm(left_top - left_bottom)
+            right_length = np.linalg.norm(right_outer - right_inner)
+            right_height = np.linalg.norm(right_top - right_bottom)
+            
+            left_ratio = left_length / max(left_height, 1)
+            right_ratio = right_length / max(right_height, 1)
+            avg_ratio = (left_ratio + right_ratio) / 2
+            
+            # 识别关键特征 (简化为最重要的几个)
+            features = {
+                'upward_tilt': avg_tilt > 10,           # 明显上扬
+                'downward_tilt': avg_tilt < -8,         # 明显下垂
+                'very_round': avg_ratio < 2.4,          # 很圆
+                'very_elongated': avg_ratio > 3.4,      # 很长
+                'asymmetric': abs(left_tilt - right_tilt) > 8  # 不对称
+            }
+            
+            return features, {
+                'avg_tilt': avg_tilt,
+                'avg_ratio': avg_ratio,
+                'left_tilt': left_tilt,
+                'right_tilt': right_tilt
+            }
+            
+        except Exception as e:
+            print(f"⚠️ 眼形分析失败: {e}")
+            return {}, {}
     
-    def calculate_3d_aware_eye_centers(self, landmarks_2d, pose_info, adjustment_type):
-        """3D感知的眼球中心计算"""
-        # 基础几何中心
-        basic_left_center = (landmarks_2d[33] + landmarks_2d[133]) / 2
-        basic_right_center = (landmarks_2d[362] + landmarks_2d[263]) / 2
-        
+    def get_pose_analysis(self, pose_info):
+        """简化的3D姿态分析"""
         if pose_info is None:
-            return basic_left_center, basic_right_center
+            return {'type': 'frontal', 'yaw': 0, 'difficulty': 'easy', 'intensity_factor': 1.0}
         
-        rotation_vector, translation_vector = pose_info
-        pose_type, yaw, pitch, roll = self.estimate_face_pose_3d(rotation_vector)
-        
-        # 3D透视校正
-        yaw_rad = np.radians(yaw)
-        pitch_rad = np.radians(pitch)
-        
-        # 透视变形校正矩阵
-        perspective_factor_x = np.cos(yaw_rad)
-        perspective_factor_y = np.cos(pitch_rad)
-        
-        # 根据调整类型和3D姿态调整参考点
-        if adjustment_type == "stretch":
-            if abs(yaw) > 20:
-                left_offset = np.array([2 / perspective_factor_x, 0])
-                right_offset = np.array([2 / perspective_factor_x, 0])
-            else:
-                left_offset = np.array([0, 2])
-                right_offset = np.array([0, 2])
-                
-        elif adjustment_type == "lift":
-            if abs(pitch) > 20:
-                vertical_correction = pitch * 0.1
-                left_offset = np.array([0, vertical_correction])
-                right_offset = np.array([0, vertical_correction])
-            else:
-                left_offset = np.array([0, 0])
-                right_offset = np.array([0, 0])
-                
-        else:  # shape模式
-            left_offset = np.array([1 / perspective_factor_x, 1 / perspective_factor_y])
-            right_offset = np.array([1 / perspective_factor_x, 1 / perspective_factor_y])
-        
-        # 应用3D校正
-        left_center = basic_left_center + left_offset
-        right_center = basic_right_center + right_offset
-        
-        print(f"📍 3D校正眼球中心: 姿态={pose_type}, yaw={yaw:.1f}°, pitch={pitch:.1f}°")
-        
-        return left_center, right_center
-    
-    def calculate_3d_adaptive_movements(self, landmarks_2d, eye_centers, pose_info, adjustment_type, intensity, eye_shape_info):
-        """计算3D自适应的移动向量"""
-        if pose_info is None:
-            pose_type, yaw, pitch, roll = "frontal", 0.0, 0.0, 0.0
-        else:
+        try:
             rotation_vector, translation_vector = pose_info
-            pose_type, yaw, pitch, roll = self.estimate_face_pose_3d(rotation_vector)
-        
-        left_center, right_center = eye_centers
-        movements = {}
-        
-        # 3D姿态自适应强度
-        pose_intensity_multiplier = self.get_pose_intensity_multiplier(pose_type, yaw, pitch, eye_shape_info)
-        
-        # 左右眼的不对称调整（基于yaw角）
-        if abs(yaw) > 10:
-            if yaw > 0:  # 右转，左眼更明显
-                left_eye_multiplier = 1.0 + abs(yaw) * 0.01
-                right_eye_multiplier = 1.0 - abs(yaw) * 0.008
-            else:  # 左转，右眼更明显
-                left_eye_multiplier = 1.0 - abs(yaw) * 0.008
-                right_eye_multiplier = 1.0 + abs(yaw) * 0.01
-        else:
-            left_eye_multiplier = right_eye_multiplier = 1.0
-        
-        print(f"🔧 3D自适应强度: 基础={intensity:.2f} × 姿态={pose_intensity_multiplier:.2f}")
-        
-        # 为左眼计算3D感知移动
-        left_movements = self.calculate_single_eye_3d_movement(
-            'left_eye', landmarks_2d, left_center, pose_info, adjustment_type,
-            intensity * pose_intensity_multiplier * left_eye_multiplier, eye_shape_info
-        )
-        movements.update(left_movements)
-        
-        # 为右眼计算3D感知移动
-        right_movements = self.calculate_single_eye_3d_movement(
-            'right_eye', landmarks_2d, right_center, pose_info, adjustment_type,
-            intensity * pose_intensity_multiplier * right_eye_multiplier, eye_shape_info
-        )
-        movements.update(right_movements)
-        
-        return movements
+            rotation_matrix, _ = cv2.Rodrigues(rotation_vector)
+            
+            sy = np.sqrt(rotation_matrix[0,0] * rotation_matrix[0,0] + rotation_matrix[1,0] * rotation_matrix[1,0])
+            yaw = np.degrees(np.arctan2(-rotation_matrix[2,0], sy))
+            
+            # 简化的姿态分类
+            if abs(yaw) < 20:
+                pose_type, difficulty = 'frontal', 'easy'
+                intensity_factor = 1.0
+            elif abs(yaw) < 35:
+                pose_type, difficulty = 'slight_profile', 'medium'
+                intensity_factor = 0.8
+            else:
+                pose_type, difficulty = 'profile', 'hard'
+                intensity_factor = 0.6
+            
+            return {
+                'type': pose_type,
+                'yaw': yaw,
+                'difficulty': difficulty,
+                'intensity_factor': intensity_factor
+            }
+            
+        except Exception as e:
+            print(f"⚠️ 姿态分析失败: {e}")
+            return {'type': 'frontal', 'yaw': 0, 'difficulty': 'easy', 'intensity_factor': 1.0}
     
-    def get_pose_intensity_multiplier(self, pose_type, yaw, pitch, eye_shape_info):
-        """根据3D姿态和眼形获取强度倍数"""
-        base_multiplier = 1.0
+    def calculate_adaptive_parameters(self, landmarks_2d, image_shape):
+        """计算自适应参数 - 基于图像尺寸和眼部实际大小"""
         
-        if pose_type == "frontal":
-            base_multiplier = 1.0
-        elif pose_type in ["right_profile", "left_profile"]:
-            base_multiplier = max(0.6, 1.0 - abs(yaw) * 0.008)
-        elif pose_type in ["looking_up", "looking_down"]:
-            base_multiplier = max(0.7, 1.0 - abs(pitch) * 0.006)
-        else:
-            base_multiplier = 0.8
-        
-        # 基于眼形的姿态敏感度
-        if eye_shape_info and 'recommendations' in eye_shape_info:
-            recommendations = eye_shape_info['recommendations']
-            if 'pose_multiplier' in recommendations:
-                base_multiplier *= recommendations['pose_multiplier']
-        
-        return base_multiplier
+        try:
+            # 计算眼部特征尺寸
+            left_eye_width = np.linalg.norm(landmarks_2d[33] - landmarks_2d[133])
+            right_eye_width = np.linalg.norm(landmarks_2d[263] - landmarks_2d[362])
+            avg_eye_width = (left_eye_width + right_eye_width) / 2
+            
+            # 计算眼部高度
+            left_eye_height = np.linalg.norm(landmarks_2d[159] - landmarks_2d[145])
+            right_eye_height = np.linalg.norm(landmarks_2d[386] - landmarks_2d[374])
+            avg_eye_height = (left_eye_height + right_eye_height) / 2
+            
+            # 计算面部特征尺寸作为参考
+            face_width = np.linalg.norm(landmarks_2d[234] - landmarks_2d[454])  # 脸宽
+            inter_eye_distance = np.linalg.norm(landmarks_2d[33] - landmarks_2d[263])  # 双眼间距
+            
+            # 图像分辨率信息
+            h, w = image_shape[:2]
+            image_area = h * w
+            image_diagonal = np.sqrt(h*h + w*w)
+            
+            # 计算眼部在图像中的相对大小
+            eye_to_face_ratio = avg_eye_width / face_width if face_width > 0 else 0.3
+            eye_to_image_ratio = avg_eye_width / w if w > 0 else 0.1
+            
+            # 自适应参数计算
+            adaptive_params = {}
+            
+            # 1. 基础移动scale - 相对于眼部大小
+            # 目标：移动距离应该是眼宽的8-15%才有明显效果
+            base_movement_ratio = 0.12  # 眼宽的12%
+            adaptive_params['base_scale'] = avg_eye_width * base_movement_ratio
+            
+            # 2. 分辨率补偿因子
+            # 高分辨率图像需要更大的移动距离
+            base_resolution = 1920 * 1080  # 基准分辨率
+            resolution_factor = np.sqrt(image_area / base_resolution)
+            resolution_factor = max(0.8, min(3.0, resolution_factor))  # 限制在0.8-3.0之间
+            adaptive_params['resolution_factor'] = resolution_factor
+            
+            # 3. 眼部尺寸补偿
+            # 小眼睛需要相对更大的调整，大眼睛可以相对保守
+            base_eye_width = 120  # 基准眼宽(像素)
+            eye_size_factor = base_eye_width / avg_eye_width if avg_eye_width > 0 else 1.0
+            eye_size_factor = max(0.7, min(1.5, eye_size_factor))  # 限制范围
+            adaptive_params['eye_size_factor'] = eye_size_factor
+            
+            # 4. 综合自适应scale
+            final_scale = (adaptive_params['base_scale'] * 
+                          adaptive_params['resolution_factor'] * 
+                          adaptive_params['eye_size_factor'])
+            
+            # 确保最小有效scale
+            min_effective_scale = max(15, avg_eye_width * 0.08)  # 至少眼宽的8%
+            final_scale = max(final_scale, min_effective_scale)
+            
+            adaptive_params['final_scale'] = final_scale
+            
+            # 5. 自适应安全限制
+            # 最大移动距离相对于眼部尺寸
+            max_safe_ratio = 0.25  # 眼宽的25%为安全上限
+            adaptive_params['max_displacement'] = avg_eye_width * max_safe_ratio
+            
+            # 6. mask尺寸调整
+            # mask半径相对于眼部尺寸
+            base_mask_ratio = 0.15  # 眼宽的15%
+            adaptive_params['mask_radius'] = max(8, avg_eye_width * base_mask_ratio)
+            
+            # 调试信息
+            print(f"📏 自适应参数计算:")
+            print(f"   图像尺寸: {w}×{h} ({image_area/1000000:.1f}M像素)")
+            print(f"   平均眼宽: {avg_eye_width:.1f}px, 眼高: {avg_eye_height:.1f}px")
+            print(f"   眼部相对尺寸: {eye_to_image_ratio:.3f} (占图像宽度比例)")
+            print(f"   分辨率因子: {resolution_factor:.2f}")
+            print(f"   眼部尺寸因子: {eye_size_factor:.2f}")
+            print(f"   最终scale: {final_scale:.1f} (目标移动距离)")
+            print(f"   安全上限: {adaptive_params['max_displacement']:.1f}px")
+            
+            return adaptive_params
+            
+        except Exception as e:
+            print(f"⚠️ 自适应参数计算失败: {e}")
+            # 返回默认参数
+            return {
+                'base_scale': 20,
+                'resolution_factor': 1.0,
+                'eye_size_factor': 1.0,
+                'final_scale': 20,
+                'max_displacement': 35,
+                'mask_radius': 12
+            }
     
-    def calculate_single_eye_3d_movement(self, eye_side, landmarks_2d, eye_center, pose_info, adjustment_type, intensity, eye_shape_info):
-        """计算单眼的3D感知移动"""
-        movements = {}
-        regions = self.EYE_MOVEMENT_REGIONS[eye_side]
+    def calculate_movement_strategy(self, features, pose_analysis, adjustment_type, adaptive_params):
+        """基于美学原理的移动策略 (增强自适应版本)"""
         
-        # 获取3D姿态信息
-        if pose_info is None:
-            pose_type, yaw, pitch, roll = "frontal", 0.0, 0.0, 0.0
-        else:
-            rotation_vector, translation_vector = pose_info
-            pose_type, yaw, pitch, roll = self.estimate_face_pose_3d(rotation_vector)
+        # 使用自适应scale替代固定scale
+        base_scale = adaptive_params['final_scale']
+        max_displacement = adaptive_params['max_displacement']
         
-        # 为每个区域计算3D感知移动
-        for region_name, point_indices in regions.items():
-            for point_idx in point_indices:
-                if point_idx < len(landmarks_2d):
-                    movement = self.calculate_3d_point_movement(
-                        landmarks_2d[point_idx], eye_center, pose_type, yaw, pitch,
-                        adjustment_type, intensity, region_name, eye_side, eye_shape_info
-                    )
-                    movements[point_idx] = movement
-        
-        return movements
-    
-    def calculate_3d_point_movement(self, point, eye_center, pose_type, yaw, pitch, adjustment_type, intensity, region_name, eye_side, eye_shape_info):
-        """计算单个点的3D感知移动"""
-        # 基础方向计算
-        direction = point - eye_center
-        direction_norm = np.linalg.norm(direction)
-        
-        if direction_norm <= 1e-6:
-            return np.array([0.0, 0.0])
-        
-        direction = direction / direction_norm
-        
-        # 区域权重
-        region_weights = {
-            'outer_corner': 1.0,
-            'inner_corner': 0.3,
-            'upper_lid': 0.7,
-            'lower_lid': 0.5,
-            'transition': 0.4
+        # 基础策略 - 使用自适应scale
+        strategy = {
+            'outer_corner': {'intensity': 1.0, 'direction': 'radial', 'scale': base_scale},
+            'outer_support': {'intensity': 0.8, 'direction': 'radial', 'scale': base_scale * 0.8},
+            'inner_corner': {'intensity': 0.2, 'direction': 'minimal', 'scale': base_scale * 0.4},
+            'upper_lid': {'intensity': 0.6, 'direction': 'arch', 'scale': base_scale * 0.7},
+            'lower_lid': {'intensity': 0.4, 'direction': 'gentle', 'scale': base_scale * 0.6},
         }
         
-        base_weight = region_weights.get(region_name, 0.5)
+        # 美学禁忌和增强规则
+        warnings = []
         
-        # 3D姿态权重调整
-        if pose_type != "frontal":
-            if eye_side == 'left_eye' and yaw > 20:
-                base_weight *= 0.8
-            elif eye_side == 'right_eye' and yaw < -20:
-                base_weight *= 0.8
+        if features.get('upward_tilt') and adjustment_type in ['lift', 'shape']:
+            # 上扬眼禁止进一步上扬
+            strategy['outer_corner']['direction'] = 'horizontal_only'
+            strategy['outer_support']['direction'] = 'horizontal_only'
+            warnings.append("🚫 上扬眼特征：禁止进一步上扬")
         
-        # 根据调整类型计算移动向量
-        if adjustment_type == "stretch":
-            movement_vector = self.calculate_3d_stretch_vector(direction, pose_type, yaw, pitch, region_name)
-            movement_scale = intensity * base_weight * 12
-            
-        elif adjustment_type == "lift":
-            movement_vector = self.calculate_3d_lift_vector(direction, pose_type, yaw, pitch, region_name, eye_side)
-            movement_scale = intensity * base_weight * 10
-            
-        else:  # shape模式
-            stretch_vec = self.calculate_3d_stretch_vector(direction, pose_type, yaw, pitch, region_name)
-            lift_vec = self.calculate_3d_lift_vector(direction, pose_type, yaw, pitch, region_name, eye_side)
-            movement_vector = stretch_vec * 0.6 + lift_vec * 0.4
-            movement_vector = movement_vector / np.linalg.norm(movement_vector)
-            movement_scale = intensity * base_weight * 11
+        if features.get('very_elongated') and adjustment_type in ['stretch', 'shape']:
+            # 细长眼禁止进一步拉长
+            for region in strategy:
+                strategy[region]['direction'] = 'vertical_priority'
+                strategy[region]['scale'] *= 0.7
+            warnings.append("🚫 细长眼特征：限制水平拉长")
         
-        return movement_vector * movement_scale
+        if features.get('downward_tilt'):
+            # 下垂眼增强上扬 - 使用更大的scale
+            strategy['outer_corner']['direction'] = 'upward_priority'
+            strategy['outer_corner']['intensity'] = 1.4
+            strategy['outer_corner']['scale'] = base_scale * 1.2  # 增强scale
+            strategy['upper_lid']['intensity'] = 0.8
+            warnings.append("✨ 下垂眼特征：启用上扬增强")
+        
+        if features.get('very_round'):
+            # 圆眼增强拉长 - 使用更大的scale
+            strategy['outer_corner']['direction'] = 'horizontal_priority'
+            strategy['outer_corner']['intensity'] = 1.3
+            strategy['outer_corner']['scale'] = base_scale * 1.15  # 增强scale
+            strategy['outer_support']['intensity'] = 1.0
+            warnings.append("✨ 圆眼特征：启用拉长增强")
+        
+        # 3D姿态调整
+        pose_factor = pose_analysis['intensity_factor']
+        for region in strategy:
+            strategy[region]['intensity'] *= pose_factor
+        
+        if pose_analysis['difficulty'] != 'easy':
+            warnings.append(f"📐 {pose_analysis['type']}姿态：强度调整为{pose_factor:.1f}x")
+        
+        # 不对称处理
+        asymmetry_adjust = {'left': 1.0, 'right': 1.0}
+        if features.get('asymmetric'):
+            # 简化的不对称处理
+            asymmetry_adjust = {'left': 1.1, 'right': 0.9}
+            warnings.append("⚖️ 不对称特征：启用差异化调整")
+        
+        # 更新最大位移限制
+        for region in strategy:
+            strategy[region]['max_displacement'] = max_displacement
+        
+        for warning in warnings:
+            print(warning)
+        
+        return strategy, asymmetry_adjust
     
-    def calculate_3d_stretch_vector(self, direction, pose_type, yaw, pitch, region_name):
-        """计算3D感知的拉长向量"""
-        if pose_type == "frontal":
-            return direction
-        else:
-            # 侧脸时需要透视校正
-            yaw_rad = np.radians(yaw)
-            perspective_correction = np.cos(yaw_rad)
-            
-            if region_name == 'outer_corner':
-                # 外眦主要沿水平方向拉长，需要透视校正
-                corrected_direction = np.array([direction[0] / max(perspective_correction, 0.5), direction[1]])
-                return corrected_direction / np.linalg.norm(corrected_direction)
-            else:
-                return direction * 0.8
-    
-    def calculate_3d_lift_vector(self, direction, pose_type, yaw, pitch, region_name, eye_side):
-        """计算3D感知的上扬向量"""
-        base_lift = np.array([0, -1])
+    def calculate_movement_vectors(self, landmarks_2d, adjustment_type, intensity, image_shape):
+        """计算移动向量 - 增强自适应版本"""
         
-        if pose_type == "frontal":
-            if region_name == 'outer_corner':
-                return direction * 0.4 + base_lift * 0.6
-            else:
-                return direction * 0.7 + base_lift * 0.3
-        else:
-            # 3D姿态时的上扬校正
-            pitch_rad = np.radians(pitch)
-            yaw_rad = np.radians(yaw)
+        # 1. 计算自适应参数
+        adaptive_params = self.calculate_adaptive_parameters(landmarks_2d, image_shape)
+        
+        # 2. 分析眼形特征
+        features, measurements = self.analyze_eye_characteristics(landmarks_2d)
+        
+        # 3. 计算眼球中心
+        left_center = (landmarks_2d[33] + landmarks_2d[133]) / 2
+        right_center = (landmarks_2d[263] + landmarks_2d[362]) / 2
+        
+        # 4. 获取姿态分析
+        pose_analysis = getattr(self, '_current_pose_analysis', 
+                               {'type': 'frontal', 'yaw': 0, 'difficulty': 'easy', 'intensity_factor': 1.0})
+        
+        # 5. 制定移动策略 (传入自适应参数)
+        strategy, asymmetry_adjust = self.calculate_movement_strategy(features, pose_analysis, adjustment_type, adaptive_params)
+        
+        # 6. 计算具体移动向量
+        movements = {}
+        
+        for eye_side in ['left_eye', 'right_eye']:
+            eye_center = left_center if eye_side == 'left_eye' else right_center
+            side_multiplier = asymmetry_adjust['left'] if eye_side == 'left_eye' else asymmetry_adjust['right']
             
-            pitch_factor = 1.0 - pitch * 0.008
-            
-            if abs(yaw) > 20:
-                rotated_lift = np.array([
-                    base_lift[0] * np.cos(yaw_rad) - base_lift[1] * np.sin(yaw_rad),
-                    base_lift[0] * np.sin(yaw_rad) + base_lift[1] * np.cos(yaw_rad)
-                ]) * pitch_factor
-            else:
-                rotated_lift = base_lift * pitch_factor
-            
-            if region_name == 'outer_corner':
-                return direction * 0.3 + rotated_lift * 0.7
-            else:
-                return direction * 0.8 + rotated_lift * 0.2
+            for region_name, point_indices in self.EYE_REGIONS[eye_side].items():
+                if region_name in strategy:
+                    region_strategy = strategy[region_name]
+                    
+                    for point_idx in point_indices:
+                        if point_idx < len(landmarks_2d):
+                            movement = self.calculate_point_movement(
+                                landmarks_2d[point_idx], eye_center, region_strategy,
+                                adjustment_type, intensity * side_multiplier, adaptive_params
+                            )
+                            movements[point_idx] = movement
+        
+        # 7. 结构保护 (传入自适应参数)
+        movements = self.apply_structure_protection(movements, landmarks_2d, adaptive_params)
+        
+        return movements, adaptive_params
     
-    def create_3d_aware_eye_mask(self, image_shape, landmarks_2d, pose_info):
-        """创建3D感知的眼角mask"""
+    def calculate_point_movement(self, point, eye_center, strategy, adjustment_type, intensity, adaptive_params):
+        """计算单点移动向量 - 自适应版本"""
+        
+        direction_type = strategy['direction']
+        region_intensity = strategy['intensity']
+        scale = strategy['scale']  # 现在是自适应的scale
+        max_displacement = strategy.get('max_displacement', adaptive_params['max_displacement'])
+        
+        # 基础方向向量
+        to_point = point - eye_center
+        to_point_norm = np.linalg.norm(to_point)
+        if to_point_norm <= 1e-6:
+            return np.array([0.0, 0.0])
+        
+        to_point_unit = to_point / to_point_norm
+        
+        # 根据方向类型计算移动向量
+        if direction_type == 'minimal':
+            movement_vector = to_point_unit * 0.2
+        elif direction_type == 'horizontal_only':
+            movement_vector = np.array([to_point_unit[0], 0])
+        elif direction_type == 'vertical_priority':
+            movement_vector = np.array([to_point_unit[0] * 0.3, to_point_unit[1]])
+        elif direction_type == 'horizontal_priority':
+            horizontal = np.array([to_point_unit[0], 0])
+            vertical = np.array([0, to_point_unit[1]])
+            movement_vector = horizontal * 0.8 + vertical * 0.2
+        elif direction_type == 'upward_priority':
+            upward = np.array([0, -1])
+            movement_vector = to_point_unit * 0.4 + upward * 0.6
+        else:  # 'radial', 'arch', 'gentle'
+            movement_vector = to_point_unit
+        
+        # 归一化
+        movement_norm = np.linalg.norm(movement_vector)
+        if movement_norm > 1e-6:
+            movement_vector = movement_vector / movement_norm
+        
+        # 应用调整类型的修正
+        type_scales = {'stretch': 1.2, 'lift': 1.0, 'shape': 1.1}
+        type_scale = type_scales.get(adjustment_type, 1.0)
+        
+        # 计算最终移动 - 现在scale是自适应的
+        final_movement = movement_vector * intensity * region_intensity * scale * type_scale
+        
+        # 自适应安全限制
+        movement_magnitude = np.linalg.norm(final_movement)
+        if movement_magnitude > max_displacement:
+            final_movement = final_movement * (max_displacement / movement_magnitude)
+        
+        return final_movement
+    
+    def apply_structure_protection(self, movements, landmarks_2d, adaptive_params):
+        """简化的结构保护 - 自适应版本"""
+        
+        if not movements:
+            return movements
+        
+        protected_movements = movements.copy()
+        
+        # 使用自适应的差异阈值
+        base_scale = adaptive_params['final_scale']
+        difference_threshold = base_scale * 2.0  # 相对于预期移动距离的阈值
+        
+        # 定义相邻点组 (简化版)
+        adjacent_groups = [
+            [33, 7, 163],               # 左眼外角
+            [157, 158, 159, 160],       # 左眼上眼睑
+            [263, 249, 390],            # 右眼外角
+            [386, 387, 388, 466]        # 右眼上眼睑
+        ]
+        
+        for group in adjacent_groups:
+            valid_movements = []
+            valid_indices = []
+            
+            for idx in group:
+                if idx in movements:
+                    valid_movements.append(movements[idx])
+                    valid_indices.append(idx)
+            
+            if len(valid_movements) >= 2:
+                # 自适应平滑：如果相邻点移动差异过大，进行平滑
+                for i in range(len(valid_movements) - 1):
+                    curr_movement = valid_movements[i]
+                    next_movement = valid_movements[i + 1]
+                    
+                    curr_mag = np.linalg.norm(curr_movement)
+                    next_mag = np.linalg.norm(next_movement)
+                    
+                    # 使用自适应阈值判断是否需要平滑
+                    mag_diff = abs(curr_mag - next_mag)
+                    if mag_diff > difference_threshold:
+                        avg_mag = (curr_mag + next_mag) / 2
+                        curr_dir = curr_movement / max(curr_mag, 1e-6)
+                        next_dir = next_movement / max(next_mag, 1e-6)
+                        avg_dir = (curr_dir + next_dir) / 2
+                        avg_dir = avg_dir / max(np.linalg.norm(avg_dir), 1e-6)
+                        
+                        protected_movements[valid_indices[i]] = avg_dir * avg_mag * 0.9
+                        protected_movements[valid_indices[i + 1]] = avg_dir * avg_mag * 0.9
+        
+        return protected_movements
+    
+    def create_eye_mask(self, image_shape, landmarks_2d, adaptive_params):
+        """创建眼部mask - 自适应版本"""
         h, w = image_shape[:2]
         mask = np.zeros((h, w), dtype=np.uint8)
         
-        # 收集所有眼部移动点
-        all_eye_points = []
-        for eye_regions in self.EYE_MOVEMENT_REGIONS.values():
+        # 收集所有眼部点
+        eye_points = []
+        for eye_regions in self.EYE_REGIONS.values():
             for point_list in eye_regions.values():
                 for idx in point_list:
                     if idx < len(landmarks_2d):
-                        all_eye_points.append(landmarks_2d[idx])
+                        eye_points.append(landmarks_2d[idx])
         
-        if len(all_eye_points) < 8:
+        if len(eye_points) < 8:
             return mask
         
-        all_eye_points = np.array(all_eye_points, dtype=np.int32)
+        # 使用自适应的mask半径
+        mask_radius = int(adaptive_params['mask_radius'])
         
-        # 3D姿态自适应扩展
-        if pose_info is None:
-            expansion_factor = 1.5
-        else:
-            rotation_vector, _ = pose_info
-            pose_type, yaw, pitch, roll = self.estimate_face_pose_3d(rotation_vector)
-            
-            if pose_type == "frontal":
-                expansion_factor = 1.6
-            else:
-                expansion_factor = 1.3 - abs(yaw) * 0.005
-                expansion_factor = max(expansion_factor, 1.1)
+        # 为每个点创建圆形区域
+        eye_points = np.array(eye_points, dtype=np.int32)
+        for point in eye_points:
+            cv2.circle(mask, tuple(point), mask_radius, 255, -1)
         
-        # 为每个点创建扩展圆形
-        for point in all_eye_points:
-            radius = int(10 * expansion_factor)
-            cv2.circle(mask, tuple(point), radius, 255, -1)
-        
-        # 形态学处理
-        kernel = np.ones((3,3), np.uint8)
+        # 自适应的形态学处理
+        kernel_size = max(3, int(mask_radius / 4))
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
         mask = cv2.dilate(mask, kernel, iterations=1)
-        mask = cv2.erode(mask, kernel, iterations=1)
         
         return mask
     
-    def apply_3d_eye_corner_transform(self, image, landmarks_2d, pose_info, adjustment_type="stretch", intensity=0.3, eye_shape_info=None):
-        """应用3D感知的眼角变形"""
-        # 3D姿态分析
-        if pose_info is None:
-            print("⚠️ 3D姿态信息无效，使用2D模式")
-            pose_type, yaw, pitch, roll = "frontal", 0.0, 0.0, 0.0
-        else:
-            rotation_vector, translation_vector = pose_info
-            pose_type, yaw, pitch, roll = self.estimate_face_pose_3d(rotation_vector)
-            print(f"🔍 3D姿态: {pose_type} (yaw={yaw:.1f}°, pitch={pitch:.1f}°, roll={roll:.1f}°)")
+    def apply_eye_corner_adjustment(self, image, landmarks_2d, pose_info, adjustment_type="stretch", intensity=0.3):
+        """应用眼角调整 - 主处理函数 (自适应版本)"""
         
-        # 计算3D感知的眼球中心
-        eye_centers = self.calculate_3d_aware_eye_centers(landmarks_2d, pose_info, adjustment_type)
+        print(f"🎯 开始眼角调整:")
+        print(f"   调整类型: {adjustment_type}")
+        print(f"   调整强度: {intensity}")
         
-        # 计算3D自适应移动向量
-        movement_vectors = self.calculate_3d_adaptive_movements(
-            landmarks_2d, eye_centers, pose_info, adjustment_type, intensity, eye_shape_info
-        )
+        # 缓存姿态分析结果
+        self._current_pose_analysis = self.get_pose_analysis(pose_info)
+        pose_analysis = self._current_pose_analysis
+        
+        print(f"   3D姿态: {pose_analysis['type']} (yaw={pose_analysis['yaw']:.1f}°)")
+        
+        # 计算移动向量 (现在返回自适应参数)
+        movement_vectors, adaptive_params = self.calculate_movement_vectors(landmarks_2d, adjustment_type, intensity, image.shape)
+        
+        if not movement_vectors:
+            print("❌ 未生成有效移动向量")
+            return image
         
         # 构建控制点
         src_points = []
@@ -728,12 +591,15 @@ class EyeCorner3DProcessor:
         
         # 添加移动点
         movement_count = 0
+        total_movement = 0
         for point_idx, movement in movement_vectors.items():
-            if point_idx < len(landmarks_2d):
-                src_points.append(landmarks_2d[point_idx])
-                dst_points.append(landmarks_2d[point_idx] + movement)
-                used_indices.add(point_idx)
-                movement_count += 1
+            src_points.append(landmarks_2d[point_idx])
+            dst_points.append(landmarks_2d[point_idx] + movement)
+            used_indices.add(point_idx)
+            movement_count += 1
+            total_movement += np.linalg.norm(movement)
+        
+        avg_movement = total_movement / movement_count if movement_count > 0 else 0
         
         # 添加稳定锚点
         anchor_count = 0
@@ -743,15 +609,6 @@ class EyeCorner3DProcessor:
                 dst_points.append(landmarks_2d[idx])
                 used_indices.add(idx)
                 anchor_count += 1
-        
-        # 添加对称辅助点
-        symmetry_count = 0
-        for idx in self.SYMMETRY_HELPERS:
-            if idx < len(landmarks_2d) and idx not in used_indices:
-                src_points.append(landmarks_2d[idx])
-                dst_points.append(landmarks_2d[idx])
-                used_indices.add(idx)
-                symmetry_count += 1
         
         # 添加边界锚点
         h, w = image.shape[:2]
@@ -765,14 +622,24 @@ class EyeCorner3DProcessor:
             src_points.append(bp)
             dst_points.append(bp)
         
-        print(f"🔧 3D控制点: 移动={movement_count}, 锚点={anchor_count}, 对称={symmetry_count}, 边界=8")
+        print(f"🔧 控制点: 移动={movement_count}, 锚点={anchor_count}, 边界=8, 总计={len(src_points)}")
+        print(f"   平均移动距离: {avg_movement:.1f}像素 (预期: {adaptive_params['final_scale']:.1f})")
+        
+        # 效果预期评估
+        expected_range = adaptive_params['final_scale']
+        if avg_movement < expected_range * 0.5:
+            print("⚠️ 实际移动距离低于预期，效果可能不明显")
+        elif avg_movement > expected_range * 1.5:
+            print("⚠️ 实际移动距离超出预期，请检查参数")
+        else:
+            print("✅ 移动距离在预期范围内")
         
         # 验证控制点数量
         if len(src_points) < 15:
             print("❌ 控制点数量不足")
             return image
         
-        # 执行TPS变形
+        # TPS变形
         try:
             src_points = np.array(src_points, dtype=np.float32)
             dst_points = np.array(dst_points, dtype=np.float32)
@@ -780,182 +647,218 @@ class EyeCorner3DProcessor:
             tps = cv2.createThinPlateSplineShapeTransformer()
             matches = [cv2.DMatch(i, i, 0) for i in range(len(src_points))]
             
-            print(f"🔄 开始3D感知TPS变换（{adjustment_type}模式，姿态：{pose_type}）...")
             tps.estimateTransformation(
                 dst_points.reshape(1, -1, 2), 
                 src_points.reshape(1, -1, 2), 
                 matches
             )
             
-            # TPS变形
             transformed = tps.warpImage(image)
             
             if transformed is None:
                 print("❌ TPS变换失败")
                 return image
             
-            # 创建3D感知mask
-            eye_mask = self.create_3d_aware_eye_mask(image.shape, landmarks_2d, pose_info)
-            
-            # 安全融合
+            # 创建自适应mask并融合
+            eye_mask = self.create_eye_mask(image.shape, landmarks_2d, adaptive_params)
             mask_3d = cv2.merge([eye_mask, eye_mask, eye_mask]).astype(np.float32) / 255.0
             mask_blurred = cv2.GaussianBlur(mask_3d, (5, 5), 0)
             
             result = image.astype(np.float32) * (1 - mask_blurred) + transformed.astype(np.float32) * mask_blurred
             result = np.clip(result, 0, 255).astype(np.uint8)
             
-            print("✅ 3D感知眼角变形成功")
+            print("✅ 眼角调整完成")
+            
+            # 效果评估
+            diff = cv2.absdiff(image, result)
+            total_diff = np.sum(diff)
+            relative_change = total_diff / (image.shape[0] * image.shape[1] * 255 * 3)
+            
+            print(f"📊 变化评估:")
+            print(f"   总差异: {total_diff:,}")
+            print(f"   平均移动: {avg_movement:.1f}px")
+            print(f"   相对变化: {relative_change:.4f}")
+            print(f"   自适应scale: {adaptive_params['final_scale']:.1f}px")
+            
+            # 智能建议
+            if relative_change < 0.001:
+                print("💡 效果较小建议:")
+                print("   • 当前图像分辨率较高，需要更大的调整强度")
+                print("   • 建议强度范围: 0.4-0.6")
+            elif relative_change > 0.01:
+                print("💡 效果较大提醒:")
+                print("   • 调整效果比较明显，如需更自然可降低强度")
+                print("   • 建议强度范围: 0.2-0.3")
+            else:
+                print("✅ 调整效果适中，在理想范围内")
+            
             return result
             
         except Exception as e:
             print(f"❌ TPS变形异常: {e}")
             return image
     
-    def debug_3d_eye_detection(self, image, save_dir=None):
-        """3D感知的眼角调试"""
-        landmarks_2d, pose_info = self.detect_landmarks_3d(image)
+    def debug_eye_analysis(self, image, save_path=None):
+        """调试眼形分析 - 增强自适应版本"""
+        
+        landmarks_2d, pose_info = self.detect_landmarks_with_pose(image)
         if landmarks_2d is None:
             print("❌ 未检测到面部关键点")
             return image
         
-        # 3D眼形分析
-        eye_shape_info = self.eye_analyzer.analyze_eye_shape_3d(landmarks_2d, pose_info)
+        features, measurements = self.analyze_eye_characteristics(landmarks_2d)
+        pose_analysis = self.get_pose_analysis(pose_info)
+        
+        # 计算自适应参数用于调试显示
+        adaptive_params = self.calculate_adaptive_parameters(landmarks_2d, image.shape)
         
         debug_img = image.copy()
         
-        # 绘制3D姿态信息
-        if pose_info is not None:
-            rotation_vector, translation_vector = pose_info
-            pose_type, yaw, pitch, roll = self.estimate_face_pose_3d(rotation_vector)
-            
-            # 显示3D姿态
-            cv2.putText(debug_img, f"3D Pose: {pose_type}", (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-            cv2.putText(debug_img, f"Yaw: {yaw:.1f}° Pitch: {pitch:.1f}° Roll: {roll:.1f}°", (10, 60), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-            
-            # 绘制3D坐标轴
-            try:
-                axis_3d = np.array([
-                    [0, 0, 0], [40, 0, 0], [0, 40, 0], [0, 0, -40]
-                ], dtype=np.float32)
-                
-                projected_axis, _ = cv2.projectPoints(
-                    axis_3d, rotation_vector, translation_vector,
-                    self.camera_matrix, self.dist_coeffs
-                )
-                projected_axis = projected_axis.reshape(-1, 2).astype(int)
-                
-                origin = tuple(projected_axis[0])
-                cv2.arrowedLine(debug_img, origin, tuple(projected_axis[1]), (0, 0, 255), 3)  # X-红
-                cv2.arrowedLine(debug_img, origin, tuple(projected_axis[2]), (0, 255, 0), 3)  # Y-绿
-                cv2.arrowedLine(debug_img, origin, tuple(projected_axis[3]), (255, 0, 0), 3)  # Z-蓝
-            except:
-                pass
-        
-        # 绘制眼部移动区域
-        region_colors = {
+        # 绘制眼部区域
+        colors = {
             'outer_corner': (0, 255, 0),    # 绿色
+            'outer_support': (0, 200, 0),   # 深绿
             'inner_corner': (255, 0, 0),    # 红色
             'upper_lid': (0, 0, 255),       # 蓝色
             'lower_lid': (255, 255, 0),     # 黄色
-            'transition': (255, 0, 255)     # 紫色
         }
         
-        for eye_side, regions in self.EYE_MOVEMENT_REGIONS.items():
+        for eye_side, regions in self.EYE_REGIONS.items():
             for region_name, point_indices in regions.items():
-                color = region_colors[region_name]
+                color = colors.get(region_name, (128, 128, 128))
                 for i, idx in enumerate(point_indices):
                     if idx < len(landmarks_2d):
                         point = landmarks_2d[idx].astype(int)
-                        cv2.circle(debug_img, tuple(point), 6, color, -1)
-                        cv2.putText(debug_img, f"{eye_side[0].upper()}{region_name[0].upper()}{i}", 
-                                   tuple(point + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1)
+                        cv2.circle(debug_img, tuple(point), 4, color, -1)
+                        cv2.putText(debug_img, f"{eye_side[0].upper()}{region_name[:3].upper()}{i}", 
+                                   tuple(point + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.25, color, 1)
         
-        # 绘制3D感知的眼球中心
-        left_center, right_center = self.calculate_3d_aware_eye_centers(landmarks_2d, pose_info, "stretch")
-        cv2.circle(debug_img, tuple(left_center.astype(int)), 8, (255, 255, 0), -1)
-        cv2.circle(debug_img, tuple(right_center.astype(int)), 8, (255, 255, 0), -1)
-        cv2.putText(debug_img, '3D-L', tuple(left_center.astype(int) + 10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
-        cv2.putText(debug_img, '3D-R', tuple(right_center.astype(int) + 10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+        # 显示分析结果
+        info_y = 30
+        cv2.putText(debug_img, f"3D Pose: {pose_analysis['type']} (yaw={pose_analysis['yaw']:.1f}°)", 
+                   (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
         
-        # 显示3D眼形分析结果
-        shape_info = eye_shape_info['eye_shape']
-        measurements = eye_shape_info['measurements']
+        cv2.putText(debug_img, f"Eye Features:", (10, info_y + 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         
-        info_y = 90
-        cv2.putText(debug_img, f"3D Eye: {shape_info['primary_type']} ({shape_info['confidence']:.2f})", 
-                   (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        feature_y = info_y + 60
+        for feature, value in features.items():
+            if value:
+                cv2.putText(debug_img, f"✓ {feature}", (10, feature_y), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                feature_y += 20
         
-        if 'pose_corrected' in measurements:
-            cv2.putText(debug_img, f"3D L/W: {measurements['length_width_ratio']:.2f}", 
-                       (10, info_y + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        cv2.putText(debug_img, f"Tilt: {measurements.get('avg_tilt', 0):.1f}°, Ratio: {measurements.get('avg_ratio', 0):.2f}", 
+                   (10, feature_y + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
         
-        # 显示3D感知mask
-        eye_mask = self.create_3d_aware_eye_mask(image.shape, landmarks_2d, pose_info)
+        # 显示自适应参数
+        cv2.putText(debug_img, f"Adaptive Scale: {adaptive_params['final_scale']:.1f}px", 
+                   (10, feature_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 128, 0), 1)
+        
+        cv2.putText(debug_img, f"Resolution Factor: {adaptive_params['resolution_factor']:.2f}", 
+                   (10, feature_y + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 128, 0), 1)
+        
+        cv2.putText(debug_img, f"Max Displacement: {adaptive_params['max_displacement']:.1f}px", 
+                   (10, feature_y + 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 128, 0), 1)
+        
+        # 显示眼球中心
+        if len(landmarks_2d) > 362:
+            left_center = (landmarks_2d[33] + landmarks_2d[133]) / 2
+            right_center = (landmarks_2d[263] + landmarks_2d[362]) / 2
+            cv2.circle(debug_img, tuple(left_center.astype(int)), 6, (255, 255, 0), -1)
+            cv2.circle(debug_img, tuple(right_center.astype(int)), 6, (255, 255, 0), -1)
+        
+        # 显示自适应mask预览
+        mask_preview = self.create_eye_mask(image.shape, landmarks_2d, adaptive_params)
         mask_overlay = debug_img.copy()
-        mask_overlay[eye_mask > 0] = [255, 0, 255]
-        debug_img = cv2.addWeighted(debug_img, 0.7, mask_overlay, 0.3, 0)
+        mask_overlay[mask_preview > 0] = [255, 0, 255]
+        debug_img = cv2.addWeighted(debug_img, 0.8, mask_overlay, 0.2, 0)
         
-        if save_dir:
-            os.makedirs(save_dir, exist_ok=True)
-            cv2.imwrite(os.path.join(save_dir, "debug_3d_eye_corner.png"), debug_img)
-            print(f"📁 3D调试文件保存到: {save_dir}")
+        if save_path:
+            cv2.imwrite(save_path, debug_img)
+            print(f"📁 调试图保存到: {save_path}")
+            
+            # 输出详细的自适应参数信息到控制台
+            print(f"\n📊 详细自适应参数:")
+            for key, value in adaptive_params.items():
+                print(f"   {key}: {value}")
         
         return debug_img
     
-    def process_image_3d(self, image, adjustment_type="stretch", intensity=0.3, save_debug=False, output_path=None):
-        """3D感知的图像处理主接口"""
-        landmarks_2d, pose_info = self.detect_landmarks_3d(image)
+    def process_image(self, image, adjustment_type="stretch", intensity=0.3, auto_optimize=True):
+        """处理图像的主接口"""
+        
+        # 检测关键点和姿态
+        landmarks_2d, pose_info = self.detect_landmarks_with_pose(image)
         if landmarks_2d is None:
             print("❌ 未检测到面部关键点")
             return image
         
         print(f"✅ 检测到 {len(landmarks_2d)} 个关键点")
         
-        # 3D眼形分析
-        print("🔍 正在进行3D感知眼形分析...")
-        eye_shape_info = self.eye_analyzer.analyze_eye_shape_3d(landmarks_2d, pose_info)
+        # Auto-Optimize: 根据眼形特征优化参数
+        if auto_optimize:
+            features, measurements = self.analyze_eye_characteristics(landmarks_2d)
+            pose_analysis = self.get_pose_analysis(pose_info)
+            
+            print("🧠 Auto-Optimize分析:")
+            
+            # 显示检测到的特征
+            active_features = [f for f, v in features.items() if v]
+            if active_features:
+                print(f"   检测特征: {', '.join(active_features)}")
+            else:
+                print("   检测特征: 标准眼形")
+            
+            # 智能调整建议
+            original_intensity = intensity
+            
+            # 基于眼形特征调整强度
+            if features.get('very_round') and adjustment_type in ['stretch', 'shape']:
+                intensity = max(intensity, 0.35)  # 圆眼需要更大强度
+                print(f"   圆眼优化: 强度提升至 {intensity}")
+            
+            if features.get('downward_tilt') and adjustment_type in ['lift', 'shape']:
+                intensity = max(intensity, 0.4)   # 下垂眼需要更大强度
+                print(f"   下垂眼优化: 强度提升至 {intensity}")
+            
+            if features.get('upward_tilt') and adjustment_type == 'lift':
+                adjustment_type = 'stretch'  # 自动切换调整类型
+                print(f"   上扬眼优化: 调整类型切换为 {adjustment_type}")
+            
+            if features.get('very_elongated') and adjustment_type == 'stretch':
+                adjustment_type = 'lift'     # 自动切换调整类型
+                print(f"   细长眼优化: 调整类型切换为 {adjustment_type}")
+            
+            # 基于姿态调整强度
+            if pose_analysis['difficulty'] != 'easy':
+                intensity *= pose_analysis['intensity_factor']
+                print(f"   姿态优化: 强度调整为 {intensity:.3f} (因子: {pose_analysis['intensity_factor']:.2f})")
+            
+            # 确保最小有效强度
+            intensity = max(intensity, 0.2)
+            
+            if abs(intensity - original_intensity) > 0.05:
+                print(f"   最终优化: {original_intensity:.2f} → {intensity:.2f}")
         
-        shape_result = eye_shape_info['eye_shape']
-        measurements = eye_shape_info['measurements']
-        
-        print(f"👁️ 3D眼形识别结果:")
-        print(f"   类型: {shape_result['primary_type']} (置信度: {shape_result['confidence']:.2f})")
-        if 'pose_corrected' in measurements:
-            print(f"   3D校正长宽比: {measurements['length_width_ratio']:.2f}")
-            print(f"   头部yaw角: {measurements['yaw_angle']:.1f}°")
-        
-        # 3D感知的推荐
-        recommendations = eye_shape_info['recommendations']
-        if 'pose_type' in recommendations:
-            print(f"   3D姿态类型: {recommendations['pose_type']}")
-            print(f"   姿态强度倍数: {recommendations['pose_multiplier']:.2f}")
-        
-        # 调试模式
-        if save_debug and output_path:
-            debug_dir = os.path.splitext(output_path)[0] + "_3d_debug"
-            self.debug_3d_eye_detection(image, debug_dir)
-        
-        # 应用3D感知的眼角变形
-        result = self.apply_3d_eye_corner_transform(
-            image, landmarks_2d, pose_info, adjustment_type, intensity, eye_shape_info
-        )
+        # 应用调整
+        result = self.apply_eye_corner_adjustment(image, landmarks_2d, pose_info, adjustment_type, intensity)
         
         return result
 
 def main():
-    parser = argparse.ArgumentParser(description='3D姿态感知的眼角调整工具')
+    parser = argparse.ArgumentParser(description='精简高效眼角调整器 - 基于美学原理的智能调整')
     parser.add_argument('--input', '-i', required=True, help='输入图片路径')
     parser.add_argument('--output', '-o', required=True, help='输出图片路径')
     parser.add_argument('--type', '-t', choices=['stretch', 'lift', 'shape'], 
-                       default='stretch', help='调整类型: stretch=水平拉长, lift=眼角上扬, shape=综合调整')
+                       default='stretch', help='调整类型: stretch=拉长, lift=上扬, shape=综合')
     parser.add_argument('--intensity', type=float, default=0.3, 
-                       help='调整强度 (0.1-0.4)')
-    parser.add_argument('--debug', action='store_true', help='3D调试模式')
-    parser.add_argument('--save-debug', action='store_true', help='保存3D调试文件')
+                       help='调整强度 (0.1-0.5)')
+    parser.add_argument('--auto-optimize', action='store_true', default=True,
+                       help='启用智能优化 (默认开启)')
+    parser.add_argument('--no-auto-optimize', dest='auto_optimize', action='store_false',
+                       help='禁用智能优化')
+    parser.add_argument('--debug', action='store_true', help='调试模式')
     parser.add_argument('--comparison', action='store_true', help='生成对比图')
     
     args = parser.parse_args()
@@ -966,84 +869,79 @@ def main():
         print(f"❌ 无法加载图片: {args.input}")
         return
     
-    print(f"📸 图片尺寸: {image.shape}")
+    print(f"📸 图片信息: {image.shape[1]}×{image.shape[0]} 像素")
     
     # 强度安全检查
-    if args.intensity > 0.4:
-        print(f"⚠️  强度 {args.intensity} 超出建议范围，限制到0.4")
-        args.intensity = 0.4
+    if args.intensity > 0.5:
+        print(f"⚠️ 强度 {args.intensity} 过大，限制到0.5")
+        args.intensity = 0.5
     elif args.intensity < 0.1:
-        print(f"⚠️  强度 {args.intensity} 过小，提升到0.1")
+        print(f"⚠️ 强度 {args.intensity} 过小，提升到0.1")
         args.intensity = 0.1
     
-    # 创建3D感知处理器
-    processor = EyeCorner3DProcessor()
+    # 创建调整器
+    adjuster = EyeCornerAdjuster()
     
     # 调试模式
     if args.debug:
-        debug_result = processor.debug_3d_eye_detection(image)
-        cv2.imwrite(args.output, debug_result)
-        print(f"🔍 3D调试图保存到: {args.output}")
+        debug_result = adjuster.debug_eye_analysis(image, args.output)
+        print(f"🔍 调试图保存到: {args.output}")
         return
     
     # 处理图片
-    print(f"🔄 开始3D感知眼角处理...")
-    print(f"   调整类型: {args.type}")
-    print(f"   调整强度: {args.intensity}")
+    print(f"🚀 启动眼角调整...")
+    print(f"   Auto-Optimize: {'开启' if args.auto_optimize else '关闭'}")
     
-    result = processor.process_image_3d(
-        image, args.type, args.intensity, args.save_debug, args.output
-    )
+    result = adjuster.process_image(image, args.type, args.intensity, args.auto_optimize)
     
     # 保存结果
     cv2.imwrite(args.output, result)
     print(f"✅ 处理完成，保存到: {args.output}")
     
-    # 检查变化统计
-    diff = cv2.absdiff(image, result)
-    total_diff = np.sum(diff)
-    max_diff = np.max(diff)
-    changed_pixels = np.sum(diff > 0)
-    
-    print(f"📊 像素变化统计:")
-    print(f"   总差异: {total_diff}")
-    print(f"   最大差异: {max_diff}")
-    print(f"   变化像素数: {changed_pixels}")
-    
-    if total_diff < 1000:
-        print("⚠️  变化很小，可能需要：")
-        print("   1. 提高 --intensity 参数")
-        print("   2. 检查3D姿态是否影响效果 (--debug)")
-        print("   3. 尝试不同的调整类型")
-    
     # 生成对比图
     if args.comparison:
-        comparison_path = args.output.replace('.', '_3d_comparison.')
+        comparison_path = args.output.replace('.', '_comparison.')
         comparison = np.hstack([image, result])
         cv2.line(comparison, (image.shape[1], 0), (image.shape[1], image.shape[0]), (0, 255, 0), 3)
         
+        # 添加标签
         cv2.putText(comparison, 'Original', (20, 50), 
                    cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
-        cv2.putText(comparison, f'3D-{args.type.upper()} {args.intensity:.2f}', 
+        cv2.putText(comparison, f'{args.type.upper()}-{args.intensity:.2f}', 
                    (image.shape[1] + 20, 50), 
                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
         
         cv2.imwrite(comparison_path, comparison)
-        print(f"📊 3D对比图保存到: {comparison_path}")
+        print(f"📊 对比图保存到: {comparison_path}")
     
-    print("\n🌟 3D姿态感知眼角调整特色:")
-    print("✅ 真实3D头部姿态估计: 基于PnP算法和标准3D面部模型")
-    print("✅ 透视校正的眼形分析: 自动校正侧脸时的测量误差")
-    print("✅ 姿态自适应的移动策略: 正面/侧脸/俯仰不同的变形方式")
-    print("✅ 3D感知的强度调整: 根据头部角度自动调整变形强度")
-    print("✅ 智能的左右眼不对称处理: 侧脸时突出可见眼部的调整")
-    print("✅ 3D边界保护: 基于真实姿态的mask边界计算")
+    # 最终统计
+    diff = cv2.absdiff(image, result)
+    total_diff = np.sum(diff)
+    changed_pixels = np.sum(diff > 0)
     
-    print("\n📖 使用示例:")
-    print("• 3D智能眼角调整: python script.py -i input.jpg -o output.png --comparison")
-    print("• 3D姿态调试: python script.py -i input.jpg -o debug.png --debug")
-    print("• 侧脸眼角拉长: python script.py -i profile.jpg -o output.png -t stretch --intensity 0.25")
-    print("• 俯视眼角上扬: python script.py -i looking_down.jpg -o output.png -t lift --intensity 0.3")
+    print(f"\n📊 处理统计:")
+    print(f"   总像素变化: {total_diff:,}")
+    print(f"   变化像素数: {changed_pixels:,}")
+    print(f"   变化强度: {total_diff/(image.shape[0]*image.shape[1]*255*3):.4f}")
+    
+    if total_diff < 50000:
+        print("💡 变化较小建议:")
+        print("   • 尝试增加 --intensity 参数")
+        print("   • 使用 --debug 查看眼形特征检测")
+        print("   • 确保图片中人脸清晰且角度合适")
+    
+    print(f"\n🌟 精简眼角调整器特色:")
+    print("✅ 3D姿态感知 - 真实头部姿态估计")
+    print("✅ 美学导向策略 - 基于眼形特征的智能调整")
+    print("✅ 结构完整性保护 - 确保自然协调的效果")
+    print("✅ Auto-Optimize - 智能参数优化")
+    print("✅ 精简高效 - 删除冗余功能，专注核心效果")
+    
+    print(f"\n📖 使用示例:")
+    print("• 智能自动调整: python script.py -i input.jpg -o output.png --comparison")
+    print("• 手动调整参数: python script.py -i input.jpg -o output.png -t lift --intensity 0.4")
+    print("• 调试眼形分析: python script.py -i input.jpg -o debug.png --debug")
+    print("• 禁用智能优化: python script.py -i input.jpg -o output.png --no-auto-optimize")
 
 if __name__ == "__main__":
     main()
