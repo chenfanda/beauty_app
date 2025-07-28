@@ -9,15 +9,18 @@ import numpy as np
 import mediapipe as mp
 
 class SimpleFaceSlimming:
-    def __init__(self):
+    def __init__(self,face_mesh=None):
         self.mp_face_mesh = mp.solutions.face_mesh
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.5
-        )
+        if not face_mesh:
+            self.face_mesh = self.mp_face_mesh.FaceMesh(
+                static_image_mode=False,
+                max_num_faces=1,
+                refine_landmarks=True,
+                min_detection_confidence=0.7,
+                min_tracking_confidence=0.5
+            )
+        else:
+            self.face_mesh = face_mesh
         
         # Jawline关键点（真正有效的控制点）
         self.JAWLINE_LEFT = [234, 93, 132, 58, 172, 136, 150, 149]

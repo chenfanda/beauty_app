@@ -12,16 +12,19 @@ import os
 from typing import List, Tuple, Optional
 
 class Mouth3DAdjustment:
-    def __init__(self):
+    def __init__(self,face_mesh=None):
         # MediaPipe设置（完全复制鼻子脚本）
         self.mp_face_mesh = mp.solutions.face_mesh
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            static_image_mode=True,
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.8,
-            min_tracking_confidence=0.8
-        )
+        if not face_mesh:
+            self.face_mesh = self.mp_face_mesh.FaceMesh(
+                static_image_mode=True,
+                max_num_faces=1,
+                refine_landmarks=True,
+                min_detection_confidence=0.8,
+                min_tracking_confidence=0.8
+            )
+        else:
+            self.face_mesh = face_mesh
         
         # 相机参数
         self.camera_matrix = None
