@@ -108,20 +108,24 @@ class AdvancedFaceWhitening:
         return 128  # 默认中等亮度
     
     def create_layered_masks(self, image, landmarks):
-        """创建分层遮罩：核心区域+外围区域"""
+        """创建分层遮罩：核心区域+外围区域 - 最小化修复版"""
         h, w = image.shape[:2]
         
         # 核心遮罩（强度100%）
         core_mask = np.zeros((h, w), dtype=np.uint8)
         core_points = np.array([landmarks[i] for i in self.CORE_WHITENING_REGION if i < len(landmarks)], np.int32)
         if len(core_points) > 0:
-            cv2.fillPoly(core_mask, [core_points], 255)
+            # 修复：使用凸包确保连续性
+            hull = cv2.convexHull(core_points)
+            cv2.fillPoly(core_mask, [hull], 255)
         
         # 完整面部遮罩
         full_mask = np.zeros((h, w), dtype=np.uint8)
         full_points = np.array([landmarks[i] for i in self.FULL_FACE_CONTOUR if i < len(landmarks)], np.int32)
         if len(full_points) > 0:
-            cv2.fillPoly(full_mask, [full_points], 255)
+            # 修复：使用凸包确保连续性
+            hull = cv2.convexHull(full_points)
+            cv2.fillPoly(full_mask, [hull], 255)
         
         # 外围遮罩 = 完整面部 - 核心区域
         outer_mask = cv2.subtract(full_mask, core_mask)
@@ -134,10 +138,7 @@ class AdvancedFaceWhitening:
     
     def adaptive_whitening_pipeline(self, face_region, brightness_level, intensity=0.5, region_type="core"):
         """
-        自适应美白管道处理
-        - 基于亮度自动调整参数
-        - 区域类型决定处理强度
-        - LAB色彩空间保持肤色自然
+        自适应美白管道处理 - 改进LAB处理，避免线性不自然
         """
         if face_region.sum() == 0:
             return face_region
@@ -163,14 +164,19 @@ class AdvancedFaceWhitening:
         final_intensity = base_intensity * brightness_multiplier
         final_intensity = np.clip(final_intensity, 0.1, 0.9)  # 安全范围
         
-        # 步骤1: L通道亮度增强（主要美白效果）
-        l_enhanced = l.astype(np.float32)
-        l_enhanced = l_enhanced * (1.0 + final_intensity * 0.15)  # 15%亮度提升
-        l_enhanced = np.clip(l_enhanced, 0, 255).astype(np.uint8)
+        # 修复：使用Gamma校正替代线性处理，避免不自然
+        gamma = 1.0 - final_intensity * 0.3
+        gamma = max(0.5, gamma)
         
-        # 步骤2: 轻微调整a通道（减少红色偏向，更自然）
+        l_normalized = l.astype(np.float32) / 255.0
+        l_enhanced = np.power(l_normalized, gamma)
+        l_enhanced = (l_enhanced * 255).astype(np.uint8)
+        
+        # 修复：更温和的a通道调整
         a_adjusted = a.astype(np.float32)
-        a_adjusted = a_adjusted * (1.0 - final_intensity * 0.05)  # 减少5%红色
+        neutral_value = 128.0
+        adjustment_factor = final_intensity * 0.02  # 降低调整强度
+        a_adjusted = a_adjusted + (neutral_value - a_adjusted) * adjustment_factor
         a_adjusted = np.clip(a_adjusted, 0, 255).astype(np.uint8)
         
         # 合并通道并转换回BGR
@@ -185,28 +191,28 @@ class AdvancedFaceWhitening:
     
     def pose_adaptive_processing(self, image, landmarks, intensity, face_pose):
         """
-        姿态自适应处理 - 参考瘦脸脚本的更精确实现
+        姿态自适应处理 - 保持原始逻辑，避免引入黑线问题
         """
-        # 基于姿态调整左右区域强度 - 参考瘦脸脚本的系数
+        # 基于姿态调整左右区域强度
         left_multiplier = 1.0  
         right_multiplier = 1.0
         
         if face_pose == "left_profile":
-            left_multiplier = 1.3   # 可见侧加强 - 与瘦脸脚本一致
-            right_multiplier = 0.7  # 隐藏侧减弱 - 与瘦脸脚本一致
+            left_multiplier = 1.3   # 可见侧加强
+            right_multiplier = 0.7  # 隐藏侧减弱
         elif face_pose == "right_profile":
-            left_multiplier = 0.7   # 隐藏侧减弱 - 与瘦脸脚本一致  
-            right_multiplier = 1.3  # 可见侧加强 - 与瘦脸脚本一致
+            left_multiplier = 0.7   # 隐藏侧减弱  
+            right_multiplier = 1.3  # 可见侧加强
         
-        # 创建左右分区遮罩 - 使用鼻尖作为分界线
+        # 保持原始的简单分区逻辑，避免复杂化
         h, w = image.shape[:2]
         face_center_x = landmarks[1][0]  # 鼻尖x坐标
         
         left_region_mask = np.zeros((h, w), dtype=np.uint8)
-        left_region_mask[:, :face_center_x] = 255
+        left_region_mask[:, :face_center_x+2] = 255  # 修复：添加2像素重叠避免间隙
         
         right_region_mask = np.zeros((h, w), dtype=np.uint8) 
-        right_region_mask[:, face_center_x:] = 255
+        right_region_mask[:, face_center_x-2:] = 255  # 修复：添加2像素重叠避免间隙
         
         return left_multiplier, right_multiplier, left_region_mask, right_region_mask
     
@@ -237,30 +243,12 @@ class AdvancedFaceWhitening:
             pose = self.estimate_face_pose(landmarks)
             brightness = self.analyze_skin_brightness(image, landmarks)
             
-            # 添加详细的姿态检测信息 - 参考瘦脸脚本的调试输出
-            left_eye_x = landmarks[33][0]
-            right_eye_x = landmarks[263][0] 
-            nose_tip_x = landmarks[1][0]
-            nose_bridge_x = landmarks[6][0]
-            eye_center_x = (left_eye_x + right_eye_x) / 2
-            nose_center_x = (nose_tip_x + nose_bridge_x) / 2
-            eye_distance = abs(right_eye_x - left_eye_x)
-            yaw_ratio = (nose_center_x - eye_center_x) / eye_distance if eye_distance > 0 else 0
-            
-            cv2.putText(debug_img, f"Pose: {pose} (yaw:{yaw_ratio:.3f})", (10, 30), 
+            cv2.putText(debug_img, f"Pose: {pose}", (10, 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
             cv2.putText(debug_img, f"Brightness: {brightness:.1f}", (10, 60), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-            cv2.putText(debug_img, f"Core Region: {len(self.CORE_WHITENING_REGION)} points", (10, 90), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-            cv2.putText(debug_img, f"Full Contour: {len(self.FULL_FACE_CONTOUR)} points", (10, 120), 
+            cv2.putText(debug_img, "Minimal Fix: Convex Hull + Gamma", (10, 90), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            
-            # 绘制姿态检测关键点
-            cv2.circle(debug_img, (int(eye_center_x), landmarks[33][1]), 6, (255, 0, 255), -1)  # 眼部中心
-            cv2.circle(debug_img, (int(nose_center_x), landmarks[1][1]), 6, (0, 255, 255), -1)  # 鼻部中心
-            cv2.line(debug_img, (int(eye_center_x), 0), (int(eye_center_x), debug_img.shape[0]), (255, 0, 255), 2)  # 眼部中轴线
-            cv2.line(debug_img, (int(nose_center_x), 0), (int(nose_center_x), debug_img.shape[0]), (0, 255, 255), 2)  # 鼻部中轴线
             
             return debug_img
         
@@ -289,8 +277,6 @@ class AdvancedFaceWhitening:
         
         # 处理核心区域（强度100%）
         if region in ["both", "core"]:
-            core_region = cv2.bitwise_and(image, image, mask=core_mask)
-            
             # 左右分区处理
             if region != "right":  # 处理左侧
                 left_core_mask = cv2.bitwise_and(core_mask, left_mask)
@@ -346,8 +332,8 @@ class AdvancedFaceWhitening:
         return result
 
 def main():
-    """进阶版主函数"""
-    parser = argparse.ArgumentParser(description='进阶分层美白工具 - 自适应+姿态感知')
+    """最小化修复版主函数"""
+    parser = argparse.ArgumentParser(description='面部美白工具 - 基于原始脚本的最小化修复')
     parser.add_argument('--input', '-i', required=True, help='输入图片路径')
     parser.add_argument('--output', '-o', required=True, help='输出图片路径')
     parser.add_argument('--intensity', type=float, default=0.5, help='美白强度(0.3-0.8推荐)')
@@ -377,7 +363,7 @@ def main():
     # 创建处理器
     processor = AdvancedFaceWhitening()
     
-    print("开始进阶分层美白处理...")
+    print("开始最小化修复版美白处理...")
     result = processor.face_whitening(image, args.intensity, args.region, args.debug)
     
     # 保存结果
@@ -392,28 +378,23 @@ def main():
         # 添加标签
         cv2.putText(comparison, 'Original', (20, 50), 
                    cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
-        cv2.putText(comparison, f'Whitening-{args.region.upper()} {args.intensity}', (image.shape[1] + 20, 50), 
+        cv2.putText(comparison, f'MinimalFix-{args.region.upper()} {args.intensity}', (image.shape[1] + 20, 50), 
                    cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
         
-        comparison_path = args.output.replace('.jpg', '_comparison.jpg')
+        comparison_path = args.output.replace('.jpg', '_comparison.png').replace('.jpeg', '_comparison.png').replace('.png', '_comparison.png')
         cv2.imwrite(comparison_path, comparison)
         print(f"对比图保存到: {comparison_path}")
     
-    # 使用建议
-    print("\n✅ 进阶功能已添加:")
-    print("🎯 分层美白 - 核心区域100%，外围区域70%")
-    print("🔄 自适应强度 - 基于面部亮度自动调整")
-    print("🎨 LAB色彩空间 - 更好的肤色保护")
-    print("📍 姿态感知 - 侧脸时可见侧适度加强")
-    print("🌟 双边滤波 - 最终边界平滑处理")
-    print("\n📖 使用建议：")
-    print("• 标准分层美白：--region both --intensity 0.5")
-    print("• 仅美白核心区域：--region core --intensity 0.6") 
-    print("• 单侧美白：--region left --intensity 0.5")
-    print("• 查看区域划分：--debug")
-    print("• 生成对比图：--comparison")
-    print("⚠️  推荐强度范围：0.3-0.8")
-    print("💡 LAB色彩空间处理，肤色更自然！")
+    # 修复说明
+    print("\n🔧 最小化修复内容:")
+    print("✅ 凸包处理 - 确保遮罩区域连续")
+    print("✅ Gamma校正 - 替代线性处理，更自然")
+    print("✅ 重叠区域 - 左右分割添加2像素重叠避免黑线")
+    print("✅ 温和调整 - 降低a通道调整强度")
+    print("✅ PNG格式 - 默认保存为PNG，更好的保真度")
+    print("\n📖 保持原始逻辑，避免过度复杂化")
+    print("💡 基于您的原始脚本，只做必要修复！")
+    print("🖼️  建议使用PNG格式输出以获得最佳质量")
 
 if __name__ == "__main__":
     main()
