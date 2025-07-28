@@ -12,16 +12,19 @@ import argparse
 from typing import List, Tuple, Optional
 
 class SafeEyeAdjustment:
-    def __init__(self):
+    def __init__(self,face_mesh=None):
         # MediaPipe设置
         self.mp_face_mesh = mp.solutions.face_mesh
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            static_image_mode=True,  # 静态图片模式更稳定
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.8,  # 提高检测阈值
-            min_tracking_confidence=0.8
-        )
+        if not face_mesh:
+            self.face_mesh = self.mp_face_mesh.FaceMesh(
+                static_image_mode=True,  # 静态图片模式更稳定
+                max_num_faces=1,
+                refine_landmarks=True,
+                min_detection_confidence=0.8,  # 提高检测阈值
+                min_tracking_confidence=0.8
+            )
+        else:
+            self.face_mesh = face_mesh
         
         # 简化的眼部关键点（增加更多控制点以获得更好效果）
         self.LEFT_EYE_ENHANCED = [33, 133, 159, 145, 158, 157, 173, 163]   # 8个点：内角、外角、上下点+中间点
